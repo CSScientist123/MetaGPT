@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-# from metagpt.actions.di.ask_review import ReviewConst
+from metagpt.actions.di.ask_review import ReviewConst
 from metagpt.actions.di.execute_nb_code import ExecuteNbCode
 from metagpt.actions.di.write_analysis_code import CheckData, WriteAnalysisCode
 from metagpt.logs import logger
@@ -16,6 +16,8 @@ from metagpt.strategy.task_type import TaskType
 from metagpt.tools.tool_recommend import BM25ToolRecommender, ToolRecommender
 from metagpt.utils.common import CodeParser
 from metagpt.utils.report import ThoughtReporter
+
+import os
 
 REACT_THINK_PROMPT = """
 # User Requirement
@@ -45,6 +47,9 @@ class DataInterpreter(Role):
     react_mode: Literal["plan_and_act", "react"] = "plan_and_act"
     max_react_loop: int = 10  # used for react mode
     user_requirement: str = ""
+
+    save_dir: str = ""
+    saved_name: str = f"good_code.py"
 
     @model_validator(mode="after")
     def set_plan_and_tool(self) -> "Interpreter":
@@ -136,14 +141,26 @@ class DataInterpreter(Role):
 
             self.working_memory.add(Message(content=result, role="user", cause_by=ExecuteNbCode))
 
+            if self.save_dir:
+                # Ensure the directory exists
+                if not os.path.exists(self.save_dir):
+                    os.makedirs(self.save_dir)
+
+                # Construct the full path
+                file_path = os.path.join(self.save_dir, self.saved_name)
+
+                # Write the content
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(code)
+
             ### process execution result ###
             counter += 1
 
-            # if not success and counter >= max_retry:
-            #     logger.info("coding failed!")
-            #     review, _ = await self.planner.ask_review(auto_run=False, trigger=ReviewConst.CODE_REVIEW_TRIGGER)
-            #     if ReviewConst.CHANGE_WORDS[0] in review:
-            #         counter = 0  # redo the task again with help of human suggestions
+            if not success and counter >= max_retry:
+                logger.info("coding failed!")
+                review, _ = await self.planner.ask_review(auto_run=False, trigger=ReviewConst.CODE_REVIEW_TRIGGER)
+                if ReviewConst.CHANGE_WORDS[0] in review:
+                    counter = 0  # redo the task again with help of human suggestions
 
         return code, result, success
 

@@ -31,6 +31,7 @@ class Researcher(Role):
     goal: str = "Gather information and conduct research"
     constraints: str = "Ensure accuracy and relevance of information"
     language: str = "en-us"
+    report_name: str = ""
     enable_concurrency: bool = True
 
     def __init__(self, **kwargs):
@@ -101,7 +102,13 @@ class Researcher(Role):
         return msg
 
     def write_report(self, topic: str, content: str):
-        filename = re.sub(r'[\\/:"*?<>|]+', " ", topic)
+        if self.report_name:
+            filename = re.sub(r'[\\/:"*?<>|]+', " ", self.report_name)
+        elif len(topic) > 50:
+            filename = 'report'
+        else:
+            filename = re.sub(r'[\\/:"*?<>|]+', " ", topic)
+
         filename = filename.replace("\n", "")
         if not RESEARCH_PATH.exists():
             RESEARCH_PATH.mkdir(parents=True)
