@@ -146,16 +146,17 @@ class OpenAILLM(BaseLLM):
             "timeout": self.get_timeout(timeout),
         }
 
-        if "o1-" in self.model:
-            # compatible to openai o1-series
-            kwargs["temperature"] = 1
-            kwargs.pop("max_tokens")
         if extra_kwargs:
             kwargs.update(extra_kwargs)
 
         if ("deepseek-v4-flash" in self.model) or ("deepseek-v4-pro" in self.model):
             print('DeepSeek model detected. Adding thinking mode...')
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+
+        if "o1-" in self.model:
+            # compatible to openai o1-series
+            kwargs["temperature"] = 1
+            kwargs.pop("max_tokens")
         return kwargs
 
     async def _achat_completion(self, messages: list[dict], timeout=USE_CONFIG_TIMEOUT) -> ChatCompletion:
