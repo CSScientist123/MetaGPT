@@ -153,6 +153,8 @@ class DataInterpreter(Role):
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(code)
 
+                    print(f'Code saved to {file_path}')
+
             ### process execution result ###
             counter += 1
 
