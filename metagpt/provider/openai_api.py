@@ -147,6 +147,7 @@ class OpenAILLM(BaseLLM):
         }
 
         if ("deepseek-v4-flash" in self.model) or ("deepseek-v4-pro" in self.model):
+            print('DeepSeek model detected. Adding thinking mode...')
             kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
         if "o1-" in self.model:
             # compatible to openai o1-series
