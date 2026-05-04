@@ -51,6 +51,8 @@ class DataInterpreter(Role):
     save_dir: str = ""
     saved_name: str = f"good_code.py"
 
+    full_code: str = ""
+
     @model_validator(mode="after")
     def set_plan_and_tool(self) -> "Interpreter":
         self._set_react_mode(react_mode=self.react_mode, max_react_loop=self.max_react_loop, auto_run=self.auto_run)
@@ -126,7 +128,7 @@ class DataInterpreter(Role):
         else:
             tool_info = ""
 
-        # data info
+        # data infso
         await self._check_data()
 
         while not success and counter < max_retry:
@@ -141,20 +143,6 @@ class DataInterpreter(Role):
 
             self.working_memory.add(Message(content=result, role="user", cause_by=ExecuteNbCode))
 
-            if self.save_dir:
-                # Ensure the directory exists
-                if not os.path.exists(self.save_dir):
-                    os.makedirs(self.save_dir)
-
-                # Construct the full path
-                file_path = os.path.join(self.save_dir, self.saved_name)
-
-                # Write the content
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(code)
-
-                    print(f'Code saved to {file_path}')
-
             ### process execution result ###
             counter += 1
 
@@ -163,6 +151,21 @@ class DataInterpreter(Role):
                 review, _ = await self.planner.ask_review(auto_run=False, trigger=ReviewConst.CODE_REVIEW_TRIGGER)
                 if ReviewConst.CHANGE_WORDS[0] in review:
                     counter = 0  # redo the task again with help of human suggestions
+
+            if success and self.save_dir:
+                self.full_code += code
+
+                # Ensure the directory exists
+                if not os.path.exists(self.save_dir):
+                    os.makedirs(self.save_dir)
+    
+                # Construct the full path
+                file_path = os.path.join(self.save_dir, self.saved_name)
+
+                # Write the content
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(self.full_code)
+                    print(f'Code saved to {file_path}')
 
         return code, result, success
 
