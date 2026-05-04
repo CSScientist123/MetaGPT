@@ -145,6 +145,9 @@ class OpenAILLM(BaseLLM):
             "model": self.model,
             "timeout": self.get_timeout(timeout),
         }
+
+        if ("deepseek-v4-flash" in self.model) or ("deepseek-v4-pro" in self.model):
+            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
         if "o1-" in self.model:
             # compatible to openai o1-series
             kwargs["temperature"] = 1

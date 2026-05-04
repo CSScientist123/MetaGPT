@@ -154,6 +154,7 @@ class DataInterpreter(Role):
 
             if success and self.save_dir:
                 self.full_code += code
+                self.full_code += "\n\n"
 
                 # Ensure the directory exists
                 if not os.path.exists(self.save_dir):
