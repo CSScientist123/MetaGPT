@@ -52,6 +52,8 @@ class DataInterpreter(Role):
     saved_name: str = f"good_code.py"
 
     full_code: str = ""
+    
+    needs_human_feedback = False
 
     @model_validator(mode="after")
     def set_plan_and_tool(self) -> "Interpreter":
@@ -146,7 +148,7 @@ class DataInterpreter(Role):
             ### process execution result ###
             counter += 1
 
-            if not success and counter >= max_retry:
+            if self.needs_human_feedback and not success and counter >= max_retry:
                 logger.info("coding failed!")
                 review, _ = await self.planner.ask_review(auto_run=False, trigger=ReviewConst.CODE_REVIEW_TRIGGER)
                 if ReviewConst.CHANGE_WORDS[0] in review:
