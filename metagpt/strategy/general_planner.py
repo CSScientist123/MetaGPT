@@ -16,11 +16,12 @@ GENERAL_TASK_PROMPT = """
 {current_task_result}
 
 ## Task Guidance
-Write code for the incomplete sections osf 'Current Task'. And avoid duplicating code from 'Finished Tasks' and 'Finished Section of Current Task', such as repeated import of packages, reading data, etc.
-Specifically, {guidance}
+{action_per_task_descr}. Specifically, {guidance}
 """
 
 class GeneralPlanner(Planner):
+    action_per_task_descr : str = ""
+
     def get_plan_status(self, exclude: List[str] = None) -> str:
         # prepare components of a plan status
         exclude = exclude or []
@@ -39,6 +40,7 @@ class GeneralPlanner(Planner):
             current_task=self.current_task.instruction,
             current_task_result=self.current_task.result if "task_result" not in exclude else exclude_prompt,
             guidance=guidance,
+            action_per_task_descr=self.action_per_task_descr
         )
 
         return prompt
