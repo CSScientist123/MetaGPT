@@ -54,6 +54,19 @@ Write code for the incomplete sections of 'Current Task'. And avoid duplicating 
 Specifically, {guidance}
 """
 
+GENERAL_TASK_PROMPT = """
+### execution result
+{task_results}
+
+## Current Task
+{current_task}
+
+### execution result
+{current_task_result}
+
+## Task Guidance
+{action_per_task_descr}. Specifically, {guidance}
+"""
 
 class Planner(BaseModel):
     plan: Plan
@@ -62,9 +75,10 @@ class Planner(BaseModel):
     )  # memory for working on each task, discarded each time a task is done
     auto_run: bool = False
 
-    def __init__(self, goal: str = "", plan: Plan = None, **kwargs):
+    def __init__(self, goal: str = "", tasks_type=TaskType, plan: Plan = None, **kwargs):
         plan = plan or Plan(goal=goal)
         super().__init__(plan=plan, **kwargs)
+        self.tasks_type = tasks_type
 
     @property
     def current_task(self):
@@ -81,7 +95,7 @@ class Planner(BaseModel):
         plan_confirmed = False
         while not plan_confirmed:
             context = self.get_useful_memories()
-            rsp = await WritePlan().run(context, max_tasks=max_tasks)
+            rsp = await WritePlan(tasks_enum=self.tasks_type).run(context, max_tasks=max_tasks)
             self.working_memory.add(Message(content=rsp, role="assistant", cause_by=WritePlan))
 
             # precheck plan before asking reviews
@@ -166,7 +180,7 @@ class Planner(BaseModel):
 
         return context_msg + self.working_memory.get()
 
-    def get_plan_status(self, exclude: List[str] = None) -> str:
+    def get_plan_status(self, exclude: List[str] = None, prompt_name='coding', include_details=False) -> str:
         # prepare components of a plan status
         exclude = exclude or []
         exclude_prompt = "omit here"
@@ -176,17 +190,29 @@ class Planner(BaseModel):
         task_results = [task.result for task in finished_tasks]
         task_results = "\n\n".join(task_results)
         task_type_name = self.current_task.task_type
-        task_type = TaskType.get_type(task_type_name)
+        task_type = self.tasks_type.get_type(task_type_name)
         guidance = task_type.guidance if task_type else ""
-
-        # combine components in a prompt
-        prompt = PLAN_STATUS.format(
-            code_written=code_written if "code" not in exclude else exclude_prompt,
+        
+        if prompt_name == 'general':
+            prompt = GENERAL_TASK_PROMPT.format(
             task_results=task_results if "task_result" not in exclude else exclude_prompt,
             current_task=self.current_task.instruction,
-            current_task_code=self.current_task.code if "code" not in exclude else exclude_prompt,
             current_task_result=self.current_task.result if "task_result" not in exclude else exclude_prompt,
             guidance=guidance,
+            action_per_task_descr=self.action_per_task_descr
         )
+        elif prompt_name == 'coding':
+            # combine components in a prompt
+            prompt = PLAN_STATUS.format(
+                code_written=code_written if "code" not in exclude else exclude_prompt,
+                task_results=task_results if "task_result" not in exclude else exclude_prompt,
+                current_task=self.current_task.instruction,
+                current_task_code=self.current_task.code if "code" not in exclude else exclude_prompt,
+                current_task_result=self.current_task.result if "task_result" not in exclude else exclude_prompt,
+                guidance=guidance,
+            )
+
+        if include_details:
+            return [task_results, task_type_name, task_type, guidance], prompt
 
         return prompt
