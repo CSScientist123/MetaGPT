@@ -22,7 +22,7 @@ GENERAL_TASK_PROMPT = """
 class GeneralPlanner(Planner):
     action_per_task_descr : str = ""
 
-    def get_plan_status(self, exclude: List[str] = None) -> str:
+    def get_plan_status(self, include_details = False, exclude: List[str] = None) -> str:
         # prepare components of a plan status
         exclude = exclude or []
         exclude_prompt = "omit here"
@@ -42,5 +42,8 @@ class GeneralPlanner(Planner):
             guidance=guidance,
             action_per_task_descr=self.action_per_task_descr
         )
-
+        
+        if include_details:
+            return [task_results, task_type_name, task_type, guidance], prompt
+        
         return prompt
