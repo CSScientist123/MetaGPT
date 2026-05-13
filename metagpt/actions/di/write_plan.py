@@ -15,6 +15,7 @@ from metagpt.logs import logger
 from metagpt.schema import Message, Plan, Task
 from metagpt.strategy.task_type import TaskType
 from metagpt.utils.common import CodeParser
+from enum import Enum
 
 PROMPT_TEMPLATE: str = """
 # Context:
@@ -41,8 +42,8 @@ Output a list of jsons following the format:
 
 
 class WritePlan(Action):
-    async def run(self, context: list[Message], max_tasks: int = 5) -> str:
-        task_type_desc = "\n".join([f"- **{tt.type_name}**: {tt.value.desc}" for tt in TaskType])
+    async def run(self, context: list[Message], tasks_enum : Enum = TaskType, max_tasks: int = 5) -> str:
+        task_type_desc = "\n".join([f"- **{tt.type_name}**: {tt.value.desc}" for tt in tasks_enum])
         prompt = PROMPT_TEMPLATE.format(
             context="\n".join([str(ct) for ct in context]), max_tasks=max_tasks, task_type_desc=task_type_desc
         )
