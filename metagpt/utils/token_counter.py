@@ -306,6 +306,8 @@ TOKEN_MAX = {
     "deepseek/deepseek-chat": 128000,  # end, for openrouter
     "deepseek-chat": 128000,
     "deepseek-coder": 128000,
+    "deepseek/deepseek-v4-flash": 128000,
+    "deepseek/deepseek-v4-pro": 128000,
     "deepseek-ai/DeepSeek-Coder-V2-Instruct": 32000,  # siliconflow
     "yi-large": 16385,
     "microsoft/wizardlm-2-8x22b": 65536,

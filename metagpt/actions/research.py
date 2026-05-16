@@ -14,7 +14,7 @@ from metagpt.tools.search_engine import SearchEngine
 from metagpt.tools.web_browser_engine import WebBrowserEngine
 from metagpt.utils.common import OutputParser
 from metagpt.utils.parse_html import WebPage
-from metagpt.utils.text import generate_prompt_chunk, reduce_message_length
+from metagpt.utils.text import generate_prompt_chunk, reduce_message_length, weighted_reduce
 
 import asyncio
 import re
@@ -25,6 +25,9 @@ from dataclasses import dataclass, asdict
 from typing import List, Optional
 from crawl4ai import AsyncWebCrawler
 from crawl4ai.async_configs import CrawlerRunConfig
+from metagpt.config2 import Config
+
+from metagpt.utils.search_helpers import * 
 
 from langchain_core.documents import Document
 from langchain_text_splitters import CharacterTextSplitter
@@ -101,6 +104,8 @@ class CollectLinks(Action):
     search_engine: Optional[SearchEngine] = None
     rank_func: Optional[Callable[[list[str]], None]] = None
 
+    deep_search : bool = False
+
     @model_validator(mode="after")
     def validate_engine_and_run_func(self):
         if self.search_engine is None:
@@ -150,7 +155,22 @@ class CollectLinks(Action):
                     break
 
         model_name = self.config.llm.model
-        prompt = reduce_message_length(gen_msg(), model_name, system_text, self.config.llm.max_token)
+
+        if self.deep_search:
+            search_results = "\n".join(
+                    f"#### Keyword: {i}\n Search Result: {j}\n" for (i, j) in zip(keywords, results)
+                )
+            prompt = SUMMARIZE_SEARCH_PROMPT.format(
+                    decomposition_nums=decomposition_nums, search_results=search_results)
+            
+            prompt = weighted_reduce(prompt,
+                search_results,
+                model_name,
+                system_text,
+                decomposition_nums)
+        else:
+            prompt = reduce_message_length(gen_msg(), model_name, system_text, self.config.llm.max_token)
+        
         logger.debug(prompt)
         queries = await self._aask(prompt, [system_text])
         try:
@@ -165,7 +185,10 @@ class CollectLinks(Action):
         return ret
 
     async def _search_and_rank_urls(
-        self, topic: str, query: str, num_results: int = 4, max_num_results: int = None
+        self, topic: str, 
+        query: str, 
+        num_results: int = 4,
+        max_num_results: int = None
     ) -> list[str]:
         """Search and rank URLs based on a query.
 
@@ -182,6 +205,12 @@ class CollectLinks(Action):
         results = await self._search_urls(query, max_results=max_results)
         if len(results) == 0:
             return []
+        
+        if self.deep_search:
+            results = crawl(topic,
+            [result.link for result in results], 
+            Config.default().llm.api_key)
+
         _results = "\n".join(f"{i}: {j}" for i, j in zip(range(max_results), results))
         time_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         prompt = COLLECT_AND_RANKURLS_PROMPT.format(topic=topic, query=query, results=_results, time_stamp=time_stamp)
@@ -206,185 +235,6 @@ class CollectLinks(Action):
         """
 
         return await self.search_engine.run(query, max_results=max_results, as_string=False)
-
-# ─────────────────────────────────────────────
-# Data class
-# ─────────────────────────────────────────────
-
-@dataclass
-class Chunk:
-    index: int
-    method: str          # "header" | "paragraph" | "raw"
-    heading: str         # nearest ancestor heading (empty if none)
-    heading_level: int   # 1-4, 0 if none
-    text: str
-    word_count: int
-
-
-# ─────────────────────────────────────────────
-# Step 1 — fetch markdown via crawl4ai
-# ─────────────────────────────────────────────
-
-async def fetch_markdown(url: str) -> str:
-    config = CrawlerRunConfig(word_count_threshold=0)
-    async with AsyncWebCrawler() as crawler:
-        result = await crawler.arun(url=url, config=config)
-    if not result.success:
-        raise RuntimeError(f"Crawl failed: {result.error_message}")
-    md = result.markdown or ""
-    return md
-
-
-# ─────────────────────────────────────────────
-# Step 2 — clean / normalise markdown
-# ─────────────────────────────────────────────
-
-def clean_markdown(md: str) -> str:
-    # Collapse 3+ blank lines → 2
-    md = re.sub(r'\n{3,}', '\n\n', md)
-    # Strip trailing whitespace per line
-    md = "\n".join(line.rstrip() for line in md.splitlines())
-    return md.strip()
-
-
-# ─────────────────────────────────────────────
-# Step 3 — split into header sections
-# ─────────────────────────────────────────────
-
-HEADING_RE = re.compile(r'^(#{1,4})\s+(.+)', re.MULTILINE)
-
-def split_by_headers(md: str):
-    """
-    Returns list of (heading_text, heading_level, body_text).
-    Content before the first heading gets heading '' / level 0.
-    """
-    sections = []
-    pos = 0
-    prev_heading = ""
-    prev_level = 0
-    for m in HEADING_RE.finditer(md):
-        body = md[pos:m.start()].strip()
-        if body or sections == []:
-            sections.append((prev_heading, prev_level, body))
-        prev_heading = m.group(2).strip()
-        prev_level = len(m.group(1))
-        pos = m.end()
-    # tail after last heading
-    tail = md[pos:].strip()
-    sections.append((prev_heading, prev_level, tail))
-    # drop empty preamble if truly empty
-    return [(h, lv, b) for h, lv, b in sections if h or b]
-
-
-# ─────────────────────────────────────────────
-# Step 4 — split a block by paragraphs
-# ─────────────────────────────────────────────
-
-def split_by_paragraphs(text: str) -> List[str]:
-    """Split on one or more blank lines."""
-    paras = re.split(r'\n\n+', text)
-    return [p.strip() for p in paras if p.strip()]
-
-
-# ─────────────────────────────────────────────
-# Step 5 — raw word-count split
-# ─────────────────────────────────────────────
-
-def split_by_words(text: str, max_words: int) -> List[str]:
-    words = text.split()
-    chunks = []
-    for i in range(0, len(words), max_words):
-        chunks.append(" ".join(words[i:i + max_words]))
-    return chunks or [text]
-
-
-# ─────────────────────────────────────────────
-# Orchestrator
-# ─────────────────────────────────────────────
-
-def chunk_markdown(md: str, max_words: int = 200) -> List[Chunk]:
-    md = clean_markdown(md)
-    chunks: List[Chunk] = []
-    idx = 0
-
-    for heading, level, body in split_by_headers(md):
-        if not body:
-            continue
-
-        paragraphs = split_by_paragraphs(body)
-
-        for para in paragraphs:
-            wc = len(para.split())
-            if wc == 0:
-                continue
-
-            if wc <= max_words:
-                # fits → paragraph chunk
-                method = "header" if heading else "paragraph"
-                chunks.append(Chunk(
-                    index=idx,
-                    method=method,
-                    heading=heading,
-                    heading_level=level,
-                    text=para,
-                    word_count=wc,
-                ))
-                idx += 1
-            else:
-                # too big → raw split
-                for piece in split_by_words(para, max_words):
-                    pwc = len(piece.split())
-                    if pwc == 0:
-                        continue
-                    chunks.append(Chunk(
-                        index=idx,
-                        method="raw",
-                        heading=heading,
-                        heading_level=level,
-                        text=piece,
-                        word_count=pwc,
-                    ))
-                    idx += 1
-
-    return chunks
-
-
-# ─────────────────────────────────────────────
-# Pretty printer
-# ─────────────────────────────────────────────
-
-COLOURS = {
-    "header":    "\033[36m",   # cyan
-    "paragraph": "\033[33m",   # yellow
-    "raw":       "\033[35m",   # magenta
-    "reset":     "\033[0m",
-    "bold":      "\033[1m",
-}
-
-def print_chunks(chunks: List[Chunk], show_text: bool = True):
-    method_counts = {}
-    for c in chunks:
-        method_counts[c.method] = method_counts.get(c.method, 0) + 1
-
-    print(f"\n{COLOURS['bold']}{'─'*60}{COLOURS['reset']}")
-    print(f"{COLOURS['bold']}  Total chunks : {len(chunks)}{COLOURS['reset']}")
-    for m, n in method_counts.items():
-        col = COLOURS.get(m, "")
-        print(f"  {col}{m:12s}{COLOURS['reset']} → {n}")
-    print(f"{COLOURS['bold']}{'─'*60}{COLOURS['reset']}\n")
-
-    if not show_text:
-        return
-
-    for c in chunks:
-        col = COLOURS.get(c.method, "")
-        h_label = f"[H{c.heading_level}] {c.heading}" if c.heading else "(no heading)"
-        print(f"{col}{'━'*60}{COLOURS['reset']}")
-        print(f"{col}Chunk #{c.index:03d}  method={c.method}  words={c.word_count}{COLOURS['reset']}")
-        print(f"  {COLOURS['bold']}{h_label}{COLOURS['reset']}")
-        preview = c.text[:300] + ("…" if len(c.text) > 300 else "")
-        print(f"  {preview}")
-        print()
 
 class WebBrowseAndSummarize(Action):
     """Action class to explore the web and provide summaries of articles and webpages."""
@@ -515,7 +365,7 @@ class ConductResearch(Action):
         content: str,
         system_text: str = RESEARCH_BASE_SYSTEM,
         uses_advanced_agent : bool = False,
-        model_name : str = "deepseek-v4-flash"
+        llm_provider = "openai"
     ) -> str:
         """Run the action to conduct research and generate a research report.
 
@@ -542,9 +392,9 @@ class ConductResearch(Action):
             )
 
             # Override the model directly on the config object
-            researcher.cfg.smart_llm_model = model_name
-            researcher.cfg.fast_llm_model = model_name
-            researcher.cfg.llm_provider = "openai"
+            researcher.cfg.smart_llm_model = Config.default().llm.model
+            researcher.cfg.fast_llm_model = Config.default().llm.model
+            researcher.cfg.llm_provider = llm_provider
             return await researcher.conduct_research()
         
         return await self._aask(prompt, [system_text])

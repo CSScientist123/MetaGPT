@@ -25,11 +25,130 @@ def reduce_message_length(
     """
     max_token = TOKEN_MAX.get(model_name, 2048) - count_output_tokens(system_text, model_name) - reserved
     for msg in msgs:
+        if model_name not in TOKEN_MAX:
+            print(f"[weighted_reduce]❗❗ Can't find {model_name}")
+
         if count_output_tokens(msg, model_name) < max_token or model_name not in TOKEN_MAX:
             return msg
 
     raise RuntimeError("fail to reduce message length")
 
+from typing import List
+
+import tiktoken
+
+
+# ──────────────────────────────────────────────
+#  TOKEN COUNTING
+# ──────────────────────────────────────────────
+
+def count_tokens(string: str, model: str = "deepseek-chat") -> int:
+    """
+    Count tokens in a string.
+    DeepSeek uses the same tokenizer as GPT (cl100k_base).
+    """
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    return len(encoding.encode(string))
+
+
+def chars_to_delete(text: str, max_tokens: int, model: str = "deepseek-chat") -> int:
+    """
+    Returns how many characters must be removed so that
+    count_tokens(text) <= max_tokens.
+
+    Returns 0 if already within limit.
+    """
+    current_tokens = count_tokens(text, model)
+    overflow = current_tokens - max_tokens
+    if overflow <= 0:
+        return 0
+
+    # Approximate: chars_per_token from the actual text
+    total_chars = len(text)
+    chars_per_token = total_chars / max(current_tokens, 1)
+    return int(overflow * chars_per_token)
+
+
+# ──────────────────────────────────────────────
+#  WEIGHTED TRUNCATION
+# ──────────────────────────────────────────────
+
+def truncate_results(
+    research_results: list[str],
+    chars_to_truncate: int,
+) -> list[str]:
+    """
+    Distribute chars_to_truncate across research_results
+    proportionally by each item's character length.
+
+    Each item is truncated from the end by:
+        int(weight * chars_to_truncate)
+    where weight = len(item) / total_chars.
+
+    Items that would be fully consumed are set to "".
+    """
+    if chars_to_truncate <= 0:
+        return research_results
+
+    total_chars = sum(len(r) for r in research_results)
+    if total_chars == 0:
+        return research_results
+
+    truncated = []
+    for r in research_results:
+        weight    = len(r) / total_chars
+        cut       = int(weight * chars_to_truncate)
+        new_len   = max(0, len(r) - cut)
+        truncated.append(r[:new_len])
+
+    return truncated
+
+
+# ──────────────────────────────────────────────
+#  COMBINED HELPER
+# ──────────────────────────────────────────────
+
+def fit_to_token_limit(
+    research_results: list[str],
+    max_tokens: int,
+    model: str = "deepseek-chat",
+) -> list[str]:
+    """
+    End-to-end: given a list of strings and a token budget,
+    return the list truncated to fit within max_tokens.
+
+    Usage:
+        results = fit_to_token_limit(research_results, max_tokens=4096)
+    """
+    combined = "\n".join(research_results)
+    cut_chars = chars_to_delete(combined, max_tokens, model)
+
+    if cut_chars == 0:
+        return research_results
+
+    print(f"  Over budget by ~{cut_chars} chars — distributing cuts...")
+    return truncate_results(research_results, cut_chars)
+
+def weighted_reduce(
+    prompt : str,
+    research_results : List[str],
+    model_name: str,
+    system_text: str,
+    decomposition_nums,
+    reserved: int = 0):
+    
+    if model_name not in TOKEN_MAX:
+        print(f"[weighted_reduce]❗❗ Can't find {model_name}")
+
+    return prompt.format(
+        decomposition_nums=decomposition_nums, 
+        search_results=fit_to_token_limit(
+            research_results,
+            max_tokens=TOKEN_MAX.get(model_name, 2048) - count_output_tokens(system_text, model_name) - reserved))
+       
 
 def generate_prompt_chunk(
     text: str,
